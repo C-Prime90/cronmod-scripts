@@ -1,11 +1,15 @@
 These scripts were written for android devices with low internal storage. They are free to use in any rooted android rom with init.d support, they are also free to release in custom roms with the condition that all credit for these scripts is givin to myself (croniccorey @xda) clearly in your original post (If you see others take credit for my work please send me an email at cronmod.dev@gmail.com).
 
+How to use:
+To include one of my scripts in your rom just add it to the init.d folder and rename it to 40a2sd/40d2ext/40int2ext depending on the chosen script, if you choose a d2ext/int2ext script then remove the "06mountdl" or "06BindCache" if they exist as the script will do this from now on.
+
 Support:
-Support is givin on my time to users and developers, if you are in need of support please email me at cronmod.dev@gmail.com with the subject header "Support". 
+Support is givin on my time to users and developers, if you are in need of support please email me at cronmod.dev@gmail.com with the subject header "Support" or visit my forum on xda at http://forum.xda-developers.com/showthread.php?t=1716124. 
 
 Credits:
 -Croniccorey @xda "Creator/Maintainer of these scripts"
 -Mastermind1024 @xda "Help with IMEI and Baseband issues in the INT2EXT sciprts"
 -CyanogenMod "Creator of the bind-cache script found in some of these scripts"
--Wes Garner "Creator of the auto-zipalign script found in these scripts" 
+-Wes Garner "Creator of the auto-zipalign script found in these scripts"
+
  
