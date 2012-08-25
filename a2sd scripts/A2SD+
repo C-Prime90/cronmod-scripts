@@ -1,0 +1,90 @@
+#!/system/bin/sh
+#################################
+##    CronMod A2SD+ - Final    ##
+## Written by CronicCorey @xda ##
+##           40a2sd            ##
+#################################
+
+## Set SD cache size
+if [ -e /sys/devices/virtual/bdi/179:0/read_ahead_kb ]
+then
+  /system/xbin/echo "2048" > /sys/devices/virtual/bdi/179:0/read_ahead_kb;
+fi;
+
+## Unmount /sd-ext if it already mounted
+busybox umount /sd-ext;
+
+## Mount mmcblk0p2 to /sd-ext
+busybox mount -o noatime,nodiratime,nosuid,nodev  /dev/block/mmcblk0p2 /sd-ext;
+mountext=`busybox mount | egrep 'ext2|ext3|ext4'`;
+if [ -n "$mountext" ]; 
+then
+busybox chown 1000:1000 /sd-ext;
+busybox chmod 771 /sd-ext;
+fi;
+
+## Create A2SD directories
+if [ ! -e /sd-ext/app ]
+then
+busybox mkdir /sd-ext/app;
+busybox mv /data/app/* /sd-ext/app;
+fi;
+
+if [ ! -e /sd-ext/app-private ]
+then
+busybox mkdir /sd-ext/app-private;
+busybox mv /data/app-private/* /sd-ext/app-private;
+fi;
+
+if [ ! -e /sd-ext/dalvik-cache ]
+then
+busybox mkdir /sd-ext/dalvik-cache;
+busybox mv /data/dalvik-cache/* /sd-ext/dalvik-cache;
+fi;
+
+## Bind A2SD directories
+busybox mount -o bind /sd-ext/app /data/app;
+busybox chown 1000:1000 /sd-ext/app;
+busybox chmod 771 /sd-ext/app;
+
+busybox mount -o bind /sd-ext/app-private /data/app-private;
+busybox chown 1000:1000 /sd-ext/app-private;
+busybox chmod 771 /sd-ext/app-private;
+
+busybox mount -o bind /sd-ext/dalvik-cache /data/dalvik-cache;
+busybox chown 1000:1000 /sd-ext/dalvik-cache;
+busybox chmod 771 /sd-ext/dalvik-cache;
+
+sync;
+
+############################################################################################################################################################
+
+######################################################################
+##                 Automatic ZipAlign by Wes Garner                 ##
+## ZipAlign files in /data that have not been previously ZipAligned ##
+##                Thanks to oknowton for the changes                ##
+######################################################################
+
+LOG_FILE=/data/zipalign.log
+    if [ -e $LOG_FILE ]; then
+    	rm $LOG_FILE;
+    fi;
+    	
+echo "Starting Automatic ZipAlign" | tee -a $LOG_FILE;
+    for apk in /data/app/*.apk ; do
+	zipalign -c 4 $apk;
+	ZIPCHECK=$?;
+	if [ $ZIPCHECK -eq 1 ]; then
+		echo ZipAligning $(basename $apk) | tee -a $LOG_FILE;
+		zipalign -f 4 $apk /cache/$(basename $apk);
+			if [ -e /cache/$(basename $apk) ]; then
+				cp -f -p /cache/$(basename $apk) $apk | tee -a $LOG_FILE;
+				rm /cache/$(basename $apk);
+			else
+				echo ZipAligning $(basename $apk) Failed | tee -a $LOG_FILE;
+			fi;
+	else
+		echo ZipAlign already completed on $apk  | tee -a $LOG_FILE;
+	fi;
+       done;
+echo "Automatic ZipAlign finished" | tee -a $LOG_FILE;
