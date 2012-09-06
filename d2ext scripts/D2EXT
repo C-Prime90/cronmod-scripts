@@ -44,7 +44,7 @@ fi;
 ## Move /nvram, /property, and /radio back to internal
 if [ ! -e /data_internal/nvram ] && [ -e /data/nvram ] 
 then
-busybox mv /data/nvram /sd-ext;
+busybox mv /data/nvram /data_internal;
 busybox ln -sf /data_internal/nvram /data;
 fi;
 
@@ -54,9 +54,9 @@ busybox mv /data/property /data_internal;
 busybox ln -sf /data_internal/property /data;
 fi;
 
-if [ ! -e /sd-ext/radio ] && [ -e /data/radio ]
+if [ ! -e /data_internal/radio ] && [ -e /data/radio ]
 then
-busybox mv /data/radio /sd-ext;
+busybox mv /data/radio /data_internal;
 busybox ln -sf /data_internal/radio /data;
 fi;
 
