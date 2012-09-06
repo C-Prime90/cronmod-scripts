@@ -8,62 +8,54 @@
 ## Set SD cache size
 if [ -e /sys/devices/virtual/bdi/179:0/read_ahead_kb ]
 then
-  /system/xbin/echo "2048" > /sys/devices/virtual/bdi/179:0/read_ahead_kb;
+busybox echo "2048" > /sys/devices/virtual/bdi/179:0/read_ahead_kb;
 fi;
 
-## Unmount /sd-ext if it already mounted
+## Make /sd-ext directory if needed and unmount /sd-ext if it already mounted
+if [ ! -e /sd-ext ]
+then
+busybox mount -o remount,rw /;
+busybox mkdir /sd-ext;
+busybox mount -o remount,ro /;
+else
 busybox umount /sd-ext;
+fi;
 
 ## Mount mmcblk0p2 to /sd-ext
 busybox mount -o noatime,nodiratime,nosuid,nodev  /dev/block/mmcblk0p2 /sd-ext;
-mountext=`busybox mount | egrep 'ext2|ext3|ext4'`;
-if [ -n "$mountext" ]; 
-then
 busybox chown 1000:1000 /sd-ext;
 busybox chmod 771 /sd-ext;
-fi;
 
-## Create A2SD directories
+## Create A2SD directories and move existing files
 if [ ! -e /sd-ext/app ]
 then
-busybox mkdir /sd-ext/app;
-busybox mv /data/app/* /sd-ext/app;
+busybox mv /data/app /sd-ext;
+busybox mkdir /data/app;
 fi;
 
 if [ ! -e /sd-ext/app-private ]
 then
-busybox mkdir /sd-ext/app-private;
-busybox mv /data/app-private/* /sd-ext/app-private;
+busybox mv /data/app-private /sd-ext;
+busybox mkdir /data/app-private;
 fi;
 
 if [ ! -e /sd-ext/data ]
 then
-busybox mkdir /sd-ext/data;
-busybox mv /data/data/* /sd-ext/data;
+busybox mv /data/data /sd-ext;
+busybox mkdir /data/data;
 fi;
 
 if [ ! -e /sd-ext/dalvik-cache ]
 then
-busybox mkdir /sd-ext/dalvik-cache;
-busybox mv /data/dalvik-cache/* /sd-ext/dalvik-cache;
+busybox mv /data/dalvik-cache /sd-ext;
+busybox mkdir /data/dalvik-cache;
 fi;
 
 ## Bind A2SD directories
 busybox mount -o bind /sd-ext/app /data/app;
-busybox chown 1000:1000 /sd-ext/app;
-busybox chmod 771 /sd-ext/app;
-
 busybox mount -o bind /sd-ext/app-private /data/app-private;
-busybox chown 1000:1000 /sd-ext/app-private;
-busybox chmod 771 /sd-ext/app-private;
-
 busybox mount -o bind /sd-ext/data /data/data;
-busybox chown 1000:1000 /sd-ext/data;
-busybox chmod 771 /sd-ext/data;
-
 busybox mount -o bind /sd-ext/dalvik-cache /data/dalvik-cache;
-busybox chown 1000:1000 /sd-ext/dalvik-cache;
-busybox chmod 771 /sd-ext/dalvik-cache;
 
 sync;
 
