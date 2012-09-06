@@ -8,31 +8,27 @@
 ## Set SD cache size
 if [ -e /sys/devices/virtual/bdi/179:0/read_ahead_kb ]
 then
-  /system/xbin/echo "2048" > /sys/devices/virtual/bdi/179:0/read_ahead_kb;
+busybox echo "2048" > /sys/devices/virtual/bdi/179:0/read_ahead_kb;
 fi;
 
 ## Unmount /sd-ext if it already mounted
 busybox umount /sd-ext;
 
-## Make new mount point
+## Make /data_internal mount point
 if [ ! -e /data_internal ]
 then
-busybox mount -o remount,rw -t yaffs2 /;
+busybox mount -o remount,rw /;
 busybox mkdir /data_internal;
-busybox mount -o remount,ro -t yaffs2 /;
+busybox mount -o remount,ro /;
 fi;
 
 ## Mount /data and move mount point to /data_internal
 busybox mount --move /data /data_internal;
 
 ## Mount mmcblk0p2 to /data
-busybox mount -o noatime,nodiratime,nosuid,nodev  /dev/block/mmcblk0p2 /data;
-mountext=`busybox mount | egrep 'ext2|ext3|ext4'`;
-if [ -n "$mountext" ]; 
-then
+busybox mount -o noatime,nodiratime,nosuid,nodev /dev/block/mmcblk0p2 /data;
 busybox chown 1000:1000 /data;
 busybox chmod 771 /data;
-fi;
 
 ## Make symlinks and move existing files
 if [ ! -e /data/app ]
@@ -40,21 +36,35 @@ then
 busybox mv /data_internal/* /data;
 busybox ln -sf /data/* /data_internal;
 busybox rm -rf /data_internal/dalvik-cache;
+busybox rm -rf /data_internal/nvram;
 busybox rm -rf /data_internal/property;
+busybox rm -rf /data_internal/radio;
 busybox rm /data_internal/zipalign.log;
 fi;
 
-## Move dalvik-cache and property back to internal
-if [ ! -e /data_internal/dalvik-cache ]
+## Move /dalvik-cache, /nvram, /property, and /radio back to internal
+if [ ! -e /data_internal/dalvik-cache ] && [ -e /data/dalvik-cache ] 
 then
 busybox mv /data/dalvik-cache /data_internal;
 busybox ln -sf /data_internal/dalvik-cache /data;
 fi;
 
-if [ ! -e /data_internal/property ]
+if [ ! -e /data_internal/nvram ] && [ -e /data/nvram ] 
+then
+busybox mv /data/nvram /sd-ext;
+busybox ln -sf /data_internal/nvram /data;
+fi;
+
+if [ ! -e /data_internal/property ] && [ -e /data/property ]
 then
 busybox mv /data/property /data_internal;
 busybox ln -sf /data_internal/property /data;
+fi;
+
+if [ ! -e /data_internal/radio ] && [ -e /data/radio ]
+then
+busybox mv /data/radio /sd-ext;
+busybox ln -sf /data_internal/radio /data;
 fi;
 
 sync;
