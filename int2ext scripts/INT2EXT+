@@ -6,6 +6,14 @@
 ###################################
 ## Thanks to Mastermind1024 @xda for helping to solve the IMEI and Baseband issues on some devices
 
+## Esce se non c'è la seconda partizione
+
+if [ ! -e /dev/block/mmcblk0p2 ]
+then
+busybox echo "Ext sdcard partition not found"
+exit
+fi
+
 ## Set SD cache size
 if [ -e /sys/devices/virtual/bdi/179:0/read_ahead_kb ]
 then
