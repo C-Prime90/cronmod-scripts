@@ -38,6 +38,12 @@ busybox mount -o noatime,nodiratime,nosuid,nodev /dev/block/mmcblk0p2 /data;
 busybox chown 1000:1000 /data;
 busybox chmod 771 /data;
 
+## If exist, mount swap partition
+if [ -e /dev/block/mmcblk0p3 ]
+then
+swapon /dev/block/mmcblk0p3
+fi
+
 ## Move existing files
 if [ ! -e /data/app ]
 then
