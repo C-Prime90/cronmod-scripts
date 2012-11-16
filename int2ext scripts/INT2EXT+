@@ -12,7 +12,7 @@ if [ ! -e /dev/block/mmcblk0p2 ]
 then
 busybox echo "Ext sdcard partition not found"
 exit
-fi
+fi;
 
 ## Set SD cache size
 if [ -e /sys/devices/virtual/bdi/179:0/read_ahead_kb ]
@@ -42,7 +42,7 @@ busybox chmod 771 /data;
 if [ -e /dev/block/mmcblk0p3 ]
 then
 swapon /dev/block/mmcblk0p3
-fi
+fi;
 
 ## Move existing files
 if [ ! -e /data/app ]
