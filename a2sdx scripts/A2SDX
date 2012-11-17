@@ -1,0 +1,182 @@
+#!/system/bin/sh
+#
+# AMARULLZ DATA TO SD-EXT MOD FOR ANDROID ( AD2SDX )
+# ==================================================
+#
+#  by amarullz [at] yahoo [dot] com
+#  xda-developers : amarullz
+#  (c) 2011
+#  * Oct 19 (ALPHA01)
+#
+#  Info: ~ For Changing Log
+##
+
+###
+# Initializing
+###
+
+#-- SDCard Speed Fix
+if [ -e /sys/devices/virtual/bdi/179:0/read_ahead_kb ]
+then
+  /system/xbin/echo "8192" > /sys/devices/virtual/bdi/179:0/read_ahead_kb;
+fi;
+
+#-- Unmount /sd-ext if it already mounted
+busybox umount /sd-ext;
+
+#-- Mount /data and move it to /sd-ext
+busybox mount /data;
+busybox mount --move /data /sd-ext;
+
+#-- Mount sd-ext to /data ( You Will Get 1GB/2GB Internal Memory :D )
+busybox mount -t ext4 -o noauto_da_alloc,data=ordered,commit=15,barrier=1,nouser_xattr,errors=continue,noatime,nodiratime,nosuid,nodev /dev/block/mmcblk0p2 /data;
+busybox chown 1000:1000 /data;
+busybox chmod 771 /data;
+
+###[ SDEXT mmcblk0p2 STRICT ]###
+# app, app_s, lib_s, app-private, data : should in /data (mmcblk0p2)
+#
+# ~ ALPHA02 - Add framework_s into (mmcblk0p2) strict 
+###
+for i in framework_s app app_s lib_s app-private data;
+do
+  #-- If Symlink in /data, delete it
+  if [ -h /data/$i ]
+  then
+    busybox rm /data/$i;
+  fi;
+    
+  #-- If Directory Exists in /sd-ext, move it to /data
+  if [ -d /sd-ext/$i ]
+  then
+    busybox mv /sd-ext/$i /data/;
+  fi;
+  
+  #-- If Directory Not Extst in /data, create it
+  if [ ! -d /data/$i ]
+  then
+    busybox mkdir /data/$i;
+    #-- Just Open All Permissions ;)
+    busybox chmod 0777 /data/$i;
+  fi;
+  
+  #-- Now Create Symlink From /sd-ext to /data
+  if [ ! -h /sd-ext/$i ]
+  then
+    busybox ln -s /data/$i /sd-ext/$i;
+  fi;
+done;
+
+###[ INTERNAL mtdblock5 STRICT ]###
+# For performance, dalvik-cache should be on /sd-ext
+###
+for i in dalvik-cache;
+do
+  #-- If Symlink in /data, delete it
+  if [ -h /sd-ext/$i ]
+  then
+    busybox rm /sd-ext/$i;
+  fi;
+    
+  #-- If Directory Exists in /sd-ext, move it to /data
+  if [ -d /data/$i ]
+  then
+    busybox mv /data/$i /sd-ext/;
+  fi;
+  
+  #-- If Directory Not Extst in /data, create it
+  if [ ! -d /sd-ext/$i ]
+  then
+    busybox mkdir /sd-ext/$i;
+    #-- Just Open All Permissions ;)
+    busybox chmod 0777 /sd-ext/$i;
+  fi;
+  
+  #-- Now Create Symlink From /sd-ext to /data
+  if [ ! -h /data/$i ]
+  then
+    busybox ln -s /sd-ext/$i /data/$i;
+  fi;
+done;
+
+###
+# Now create symlink of the rest non Symlink Directories and Files on /sd-ext to /data
+#
+# ~ ALPHA02 - Fix ls to ls -a, it's ok, because we test -h for symlink
+###
+cd /sd-ext;
+for i in `ls -a`;
+do
+  if [ $i != ".." -a $i != "." ]
+  then
+    if [ ! -h /sd-ext/$i ]
+    then
+      if [ ! -h /data/$i ]
+      then
+        busybox ln -s /sd-ext/$i /data/$i;
+      fi;
+    fi;
+  fi;
+done;
+cd /;
+
+###
+# It should also need to create the rest non Symlink Directories and Files on /data to /sd-ext
+# ~ ALPHA02 - Some Directory may be missing if we don't use it
+###
+cd /data;
+for i in `ls -a`;
+do
+  if [ $i != ".." -a $i != "." ]
+  then
+    if [ ! -h /data/$i ]
+    then
+      if [ ! -h /sd-ext/$i ]
+      then
+        busybox ln -s /data/$i /sd-ext/$i;
+      fi;
+    fi;
+  fi;
+done;
+cd /;
+
+###
+# Now Important Thing, is to move the com.htc* and com.android* data to /sd-ext (internal) 
+# For Good performance. So the system applications will run smooth.
+#
+# System application will read/write in Internal memory, and 3rd apps will run on sdcard
+#
+# Notice: Will be affected in 2nd boot :D, so Reboot the system after 1st boot...
+###
+
+#-- Prepare data_s in /sd-ext ( For system data )
+if [ ! -d /sd-ext/data_s ]
+then
+  busybox mkdir /sd-ext/data_s;
+  #-- Just Open All Permissions ;)
+  busybox chmod 0777 /sd-ext/data_s;
+fi;
+
+#-- Now Move All com.htc* and com.android* to Internal Memory
+cd /data/data/;
+for i in `ls -d com.htc* com.android*`;
+do
+  #-- Only Non Symlink
+  if [ ! -h /data/data/$i ]
+  then
+	  busybox mv /data/data/$i /sd-ext/data_s/;
+	fi;
+done;
+
+#-- Create Symlink of /data/data_s/* to /data/data/ (mmcblk0p2)
+cd /sd-ext/data_s/
+for i in `ls -d *`;
+do
+  #-- Only If Symlink Not Exists
+  if [ ! -h /data/data/$i ]
+  then
+	  busybox ln -s /sd-ext/data_s/$i /data/data/$i
+	fi;
+done;
+
+#-- Of Finished.... :D

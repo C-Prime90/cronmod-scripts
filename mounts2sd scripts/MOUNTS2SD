@@ -1,0 +1,1069 @@
+#!/system/bin/sh
+
+# possible Properties
+#  - ro.m2sd.path.sdcard		'Default: $SEARCH_RESULT'	Script Only
+#  - ro.m2sd.path.script		'Default: $0'			UI Only
+#  - ro.m2sd.path.props			'Default: /data/property/'	UI Only
+#  - ro.m2sd.path.logs			'Default: /system/etc'		UI Only
+
+M2SD_VERSION="4.6.2"
+M2SD_PROPERTIES="safemode:m2sd.safemode.switch:-1:option debug:m2sd.debug.switch:0:boolean rmount:m2sd.rmount.switch:0:boolean noatime:m2sd.noatime.switch:1:boolean dlcache:m2sd.cache.download.switch:0:boolean extfs:m2sd.extfs.value:auto:fstype apps:m2sd.apps.switch:1:boolean data:m2sd.data.switch:0:boolean cmdalvik:m2sd.dalvik.cm.switch:-1:option dalvik:m2sd.dalvik.switch:0:boolean cache:m2sd.cache.switch:-1:option swap:m2sd.swap.switch:0:boolean readahead:m2sd.readahead.value:512:integer journal:m2sd.journal.switch:0:option fschk:m2sd.fschk.switch:1:boolean"
+BB="busybox"
+TOOLBOX="toolbox"
+
+# =========================================================================================
+# SET LOG FUNCTION
+# =========================================================================================
+doLog() {
+	LOG_LEVEL="$1"
+	LOG_MSG="$2"
+
+	$TOOLBOX log -p $LOG_LEVEL -t mounts2sd "$LOG_MSG"
+
+	if $BB [ -e /props/mounts2sd.status ]; then
+		$BB echo "$LOG_MSG"
+
+	else
+		if $BB [ -z "$TMP_LABE" ]; then
+			export TMP_LABE="TRUE"
+
+			doCreateFile /data/m2sd/m2sd.log 
+		fi
+
+		$BB echo "$LOG_LEVEL/$LOG_MSG" >> /data/m2sd/m2sd.log
+	fi
+}
+
+doProp() {
+	PROP_ACTION="$1"
+	PROP_NAME="$2"
+	PROP_VALUE="$3"
+
+	case "$PROP_ACTION" in
+		"remove")
+			if $BB [ ! -z "$PROP_NAME" ] && $BB [ -e /props/$PROP_NAME ]; then
+				$BB rm -rf /props/$PROP_NAME
+			fi
+		;;
+
+		"set")
+			if $BB [ ! -z "$PROP_NAME" ]; then
+				$BB echo "$PROP_VALUE" > /props/$PROP_NAME
+			fi
+		;;
+
+		"get")
+			if $BB [ ! -z "$PROP_NAME" ]; then
+				$BB [ -e /props/$PROP_NAME ] && $BB cat /props/$PROP_NAME
+
+			else
+				for i in /props/*; do
+					$BB echo "[`busybox basename $i`]: [`cat $i`]"
+				done
+			fi
+		;;
+	esac
+}
+
+doCreateFolder() {
+	CF_PATH="$1"
+
+	if $BB [ ! -d $CF_PATH ] || $BB [ -L $CF_PATH ]; then
+		$BB [ -L $CF_PATH ] && $BB rm -rf $CF_PATH
+
+		$BB [ "$CACHE_DEBUG" = "1" ] && doLog d "doCreateFolder: Creating new folder $CF_PATH..."
+		$BB mkdir -p $CF_PATH
+
+		if $BB [ "$4" = "force" ]; then
+			CF_OWNER="$2"
+			CF_MOD="$3"
+
+		else
+			CF_BUILDIN="`$BB grep mkdir /init.rc | $BB grep " $CF_PATH "`"
+
+			if $BB [ ! -z "$CF_BUILDIN" ]; then
+				CF_OWNER="`$BB echo $CF_BUILDIN | $BB tr -s " " | $BB sed 's/.* \([^ ]*\) \([^ ]*\)$/\1\.\2/'`"
+				CF_MOD="`$BB echo $CF_BUILDIN | $BB tr -s " " | $BB cut -d ' ' -f3`"
+			else
+				$BB [ ! -z "$2" ] && CF_OWNER="$2" || CF_OWNER="1000.1000"
+				$BB [ ! -z "$3" ] && CF_MOD="$3" || CF_MOD="0771"
+			fi
+		fi
+
+		$BB [ "$CACHE_DEBUG" = "1" ] && doLog d "doCreateFolder: Setting permissions on $CF_PATH, mod($CF_MOD), own($CF_OWNER)..."
+
+		if $BB [ -z "$CH_BIN" ]; then
+			$TOOLBOX chown 2> /dev/null
+
+			# Busybox cannot always set owners based on names, so we use toolbox whenever we can.
+			# However not all toolbox versions has chmod and chown included.
+			if $BB [ "$?" = "255" ]; then
+				export CH_BIN="$BB"
+			else
+				export CH_BIN="$TOOLBOX"
+			fi
+		fi
+
+		$CH_BIN chown $CF_OWNER $CF_PATH
+		$CH_BIN chmod $CF_MOD $CF_PATH
+	fi
+}
+
+doCreateFile() {
+	CI_FILE="$1"
+	CI_PATH="`$BB dirname $1`"
+
+	$BB [ ! -z "$2" ] && CI_CONTENT="$2" || CI_CONTENT=""
+	$BB [ ! -z "$3" ] && CI_OWNER="$3" || CI_OWNER="1000.1000"
+	$BB [ ! -z "$4" ] && CI_MOD="$4" || CI_MOD="0661"
+
+	doCreateFolder $CI_PATH $CI_OWNER
+
+	$BB [ "$CACHE_DEBUG" = "1" ] && doLog d "doCreateFile: Writing to file $CI_FILE..."
+	$BB echo "$CI_CONTENT" > $CI_FILE
+
+	$BB [ "$CACHE_DEBUG" = "1" ] && doLog d "doCreateFile: Setting permissions on $CI_FILE, mod($CI_MOD), own($CI_OWNER)..."
+	$BB chown $CI_OWNER $CI_FILE
+	$BB chmod $CI_MOD $CI_FILE
+}
+	
+# This is used as a hack to break out of at any time
+for loopwrapper in true; do
+
+	# ////////////////////////////////////////////////////////////////////////////////////////////
+	# -------------------------------------------------------------------------------------------
+	# DO SOME BUSYBOX TESTING BEFORE ANYTHING ELSE
+	# -------------------------------------------------------------------------------------------
+	# \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+
+	$BB test 2> /dev/null
+
+	# This is a hacked way of checking whether or not the m2sd busybox exists or not.
+	# Some toolbox versions are so limited that they don't even support basic echo command, and most are missing things like [ to make proper conditional checks using if and else.
+	case "$?" in
+		"1") ;;
+
+		*)
+			$TOOLBOX log -p e -t mounts2sd "Missing Busybox!"
+
+			# Break loopwrapper
+			break
+		;;
+	esac
+
+	CALL_NAME="`$BB basename $0`"
+	# It's common for busybox not to always support readlink
+	$BB [ ! -z "`$BB --list | $BB grep readlink`" ] && SCRIPT_PATH=`$BB readlink -f $0` || SCRIPT_PATH=/system/etc/init.d/10mounts2sd
+
+	if $BB [ "$CALL_NAME" = "m2sd" ] || ( $BB [ ! -z "$1" ] && $BB [ "$1" = "m2sd" ] ); then
+		if $BB [ "`$BB id | $BB sed -ne "s/^uid=\([0-9]*\)[^0-9].*$/\1/p"`" != "0" ]; then
+			$BB echo "You need to be root to access m2sd configurations. Type 'su' in console to gain superuser privileges!"
+		
+		else
+			$BB [ "$CALL_NAME" = "m2sd" ] && INAME="$1" || INAME="$2"
+			$BB [ "$CALL_NAME" = "m2sd" ] && IVALUE="$2" || IVALUE="$3"
+
+			case "$INAME" in
+				""|"help"|"--help"|"-h")
+					$BB echo ""
+					$BB echo " Usage: m2sd [index]			: Get value from index" 
+					$BB echo " Usage: m2sd [index] [value]		: Change current value"
+					$BB echo ""
+					$BB echo " - cache [disable/enable/auto]		: Enable/disable cache2sd"
+					$BB echo " - dlcache [disable/enable]		: Replace /cache/download/ instead of /cache/"
+ 					$BB echo " - debug [disable/enable]		: Enable/disable debugging"
+					$BB echo " - apps [disable/enable]		: Enable/disable apps2sd"
+
+					if $BB [ "`doProp get mounts2sd.status`" != "safe-mode" ]; then
+						$BB echo " - dalvik [disable/enable]		: Enable/disable dalvik2sd"
+						$BB echo " - cmdalvik [disable/enable/auto]	: Enable/disable CyanogenMod dalvik fix (/cache to /data)"
+						$BB echo " - data [disable/enable]		: Enable/disable data2sd (/data/data)"
+						$BB echo " - rmount [disable/enable]		: Reversed mount. sd-ext on /data and data on /sd-ext"
+					fi
+
+					$BB echo " - swap [disable/enable]		: Enable/disable swap"
+					$BB echo " - journal [disable/enable/auto]	: Enable/disable ext(3,4) journal on sd-ext"
+					$BB echo " - fschk [disable/enable]		: Enable/disable file system check during boot"
+					$BB echo " - noatime [disable/enable]		: Mount /data and /sd-ext with noatime"
+					$BB echo " - readahead [0-9]			: Set sdcard readahead (In kb)"
+					$BB echo " - extfs [auto/<fs-type>]		: Force a specific fs type on /sd-ext mount"
+					$BB echo " - safemode [disable/enable/auto]	: Enable/Disable safemode"
+					$BB echo ""
+					$BB echo "Info:"
+					$BB echo "-----"
+					$BB echo " - log					: Get the log from last boot"
+					$BB echo " - status				: Get the status"
+					$BB echo " - version				: Get current version"
+					$BB echo ""
+					$BB echo "Actions:"
+					$BB echo "--------"
+					$BB echo " - fixperm				: Do a one time permissions check and fix them if needed"
+					$BB echo ""
+
+					if $BB [ "`doProp get mounts2sd.status`" = "safe-mode" ]; then
+						$BB echo "--------------"
+						$BB echo "Mounts2SD is currently running in safe-mode and some options is therefore hidden/disabled. In order to use all of the options of the script, your ROM must use the sysinit execute method of handling init.d scripts. Your ROM is currently using the sysinit service method which is highly unstable."
+					fi
+				;;
+
+				"log")
+					if $BB [ -f /data/m2sd/m2sd.log ] && $BB [ ! -z "`$BB cat /data/m2sd/m2sd.log`" ]; then
+						$BB cat /data/m2sd/m2sd.log
+
+					else
+						$BB echo " - Log file is empty!"
+					fi
+				;;
+
+				"status") 
+					$BB echo ""
+					$BB echo "Status:"
+					$BB echo "-------"
+					$BB echo " * Mounts2SD [`doProp get mounts2sd.status`]"
+					$BB echo "   - Apps [`doProp get mounts2sd.sdext.status.apps`]"
+					$BB echo "   - Data [`doProp get mounts2sd.sdext.status.data`]"
+					$BB echo "   - Dalvik [`doProp get mounts2sd.sdext.status.dalvik`]"
+					$BB echo "   - CmDalvik [`doProp get mounts2sd.cmdalvik.status`]"
+					$BB echo "   - Cache [`doProp get mounts2sd.cache.status`]"
+					$BB echo "   - SWAP [`doProp get mounts2sd.swap.status`]"
+					$BB echo "   - RMount [`doProp get mounts2sd.rmount.status`]"
+					$BB echo ""
+					$BB echo "Device info:"
+					$BB echo "------------"
+					$BB echo " * SD-EXT device [`doProp get mounts2sd.sdext.device`]"
+					$BB echo " * Swap device [`doProp get mounts2sd.swap.device`]"
+					$BB echo ""
+					$BB echo "Locations:"
+					$BB echo "------------"
+
+					if [ "`doProp get mounts2sd.cache.status`" = "loaded" ]; then
+						$BB echo " * Cache [`doProp get mounts2sd.cache.path` -> `doProp get mounts2sd.cache.location`]"
+					else
+						$BB echo " * Cache []"
+					fi
+
+					$BB echo ""
+				;;
+
+				"version") 
+					$BB echo "$M2SD_VERSION"
+				;;
+
+				"fixperm") 
+					doCreateFile /data/m2sd/property/m2sd.fix.permissions.boot "1"
+					$BB echo "A permissions check will be performed during the next boot!"
+				;;
+
+				*)
+					CMD_LINE="`$BB echo $M2SD_PROPERTIES | $BB sed -n "s/^.*[ ]*\($INAME:[^:]*:[^:]*:[^ ]*\).*$/\1/p"`"
+
+					if $BB [ ! -z "$CMD_LINE" ]; then
+						CMD_FILE="`$BB echo $CMD_LINE | $BB cut -d ":" -f 2`"
+						CMD_VALUE="`$BB echo $CMD_LINE | $BB cut -d ":" -f 3`"
+						CMD_TYPE="`$BB echo $CMD_LINE | $BB cut -d ":" -f 4`"
+
+						if $BB [ ! -z "$IVALUE" ]; then
+							IVALUENAME="$IVALUE"
+
+							case "$CMD_TYPE" in
+								"boolean") 
+									if $BB [ "$IVALUE" = "enable" ] || $BB [ "$IVALUE" = "disable" ]; then
+										CHK_EXCEPT="true"
+										$BB [ "$IVALUE" = "enable" ] && IVALUE="1" || IVALUE="0"
+
+									else
+										$BB echo "Invalid value. The command '$INAME' only excepts the values 'enable' or 'disable'!"
+									fi
+								;;
+
+								"option") 
+									if $BB [ "$IVALUE" = "enable" ] || $BB [ "$IVALUE" = "disable" ] || $BB [ "$IVALUE" = "auto" ]; then
+										CHK_EXCEPT="true"
+
+										if $BB [ "$IVALUE" = "auto" ]; then
+											IVALUE="-1"
+										else
+											$BB [ "$IVALUE" = "enable" ] && IVALUE="1" || IVALUE="0"
+										fi
+
+									else
+										$BB echo "Invalid value. The command '$INAME' only excepts the values 'enable', 'disable' or 'auto'!"
+									fi
+								;;
+
+								"integer") 
+									if $BB [ -z "`$BB echo $IVALUE | $BB sed 's/[0-9]//g'`" ]; then
+										CHK_EXCEPT="true"
+
+									else
+										$BB echo "Invalid value. The command '$INAME' only excepts numeric values!"
+									fi
+								;;
+
+								"fstype") 
+									if $BB [ "$IVALUE" = "auto" ] || $BB [ ! -z "`$BB grep $IVALUE /proc/filesystems | $BB grep -v 'nodev'`" ]; then
+										CHK_EXCEPT="true"
+
+									else
+										$BB echo "Invalid or unsupported file system type."
+										$BB echo "Valid/supported types are either 'auto' or one of the fallowing..."
+										$BB echo "`$BB grep -v 'nodev' /proc/filesystems`"
+									fi
+								;;
+							esac
+
+							if $BB [ "$CHK_EXCEPT" = "true" ]; then
+								doCreateFile /data/m2sd/property/$CMD_FILE "$IVALUE"
+								$BB echo " - Changed M2SD $INAME to $IVALUENAME. Reboot to make changes take affect!"
+							fi
+
+						else
+							if $BB [ ! -f /data/m2sd/property/$CMD_FILE ]; then
+								doCreateFile /data/m2sd/property/$CMD_FILE "$CMD_VALUE"
+							fi
+
+							if $BB [ "$CMD_TYPE" != "boolean" ] && $BB [ "$CMD_TYPE" != "option" ]; then
+								$BB echo "`$BB cat /data/m2sd/property/$CMD_FILE`"
+
+							else
+								IVALUE="`$BB cat /data/m2sd/property/$CMD_FILE`"
+
+								if $BB [ "$CMD_TYPE" = "option" ] && $BB [ "$IVALUE" = "-1" ]; then
+									echo "auto"
+
+								else
+									$BB [ "$IVALUE" = "1" ] && echo "enable" || echo "disable"
+								fi
+							fi
+						fi
+
+					else
+						$BB echo "Invalid command. Type 'm2sd help' to see all available options!"
+					fi
+				;;
+			esac
+		fi
+
+	else
+		if [ ! -z "`doProp get mounts2sd.status`" ]; then
+			doLog v "M2SD has already been loaded. Canceling second run!"; break
+		fi
+		# ////////////////////////////////////////////////////////////////////////////////////////////
+		# -------------------------------------------------------------------------------------------
+		# PREPARRE THE EVERYTING FOR THE INIT.D PART
+		# -------------------------------------------------------------------------------------------
+		# \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+		WR_ROOT="`$BB grep ' / ' /proc/mounts | $BB sed 's/.*[ ,]\(r[ow]\)[ ,].*/\1/'`"
+		WR_SYSTEM="`$BB grep ' /system ' /proc/mounts | $BB sed 's/.*[ ,]\(r[ow]\)[ ,].*/\1/'`"
+
+		$BB [ "$WR_ROOT" != "rw" ] && $BB mount -o remount,rw /
+		$BB [ "$WR_SYSTEM" != "rw" ] && $BB mount -o remount,rw /system
+
+		for i in /sd-ext /props /data/m2sd /data/m2sd/property; do
+			doCreateFolder $i "1000.1000" "0771"
+		done
+
+		if $BB [ -e /data/m2sd/property/m2sd.switch ] && $BB [ "`$BB cat /data/m2sd/property/m2sd.switch`" = "0" ]; then
+			doLog v "M2SD is disabled!"
+
+			$BB [ "$WR_ROOT" != "rw" ] && $BB mount -o remount,ro /
+			$BB [ "$WR_SYSTEM" != "rw" ] && $BB mount -o remount,ro /system
+
+			break
+		fi
+
+		if $BB [ -e /sys/class/leds/green/brightness ]; then
+			$BB echo 1 > /sys/class/leds/green/brightness
+
+		elif $BB [ -e /sys/class/leds/button-backlight/brightness ]; then
+			$BB echo 255 > /sys/class/leds/button-backlight/brightness
+		fi
+
+		if $BB [ -e /data/m2sd/property/m2sd.debug.switch ] && $BB [ "`$BB cat /data/m2sd/property/m2sd.debug.switch`" = "1" ]; then
+			logcat > /data/m2sd/m2sd.debug &
+			LOGCAT_PID="$!"
+			export CACHE_DEBUG="1"
+		fi
+
+		doLog v "Initiating Mounts2SD (v:$M2SD_VERSION) [`$TOOLBOX date`]"
+		doLog v "Checking configurations..."
+
+		# ////////////////////////////////////////////////////////////////////////////////////////////
+		# -------------------------------------------------------------------------------------------
+		# HANDLE THE CONFIGURATIONS 
+		# -------------------------------------------------------------------------------------------
+		# \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+
+		# Create the default settings if they do not exist 
+		for i in $M2SD_PROPERTIES; do
+			I_INDEX="`$BB echo $i | $BB cut -d ":" -f 2`"
+
+			if $BB [ ! -e /data/m2sd/property/$I_INDEX ] || $BB [ -z "`$BB cat /data/m2sd/property/$I_INDEX`" ]; then
+				$BB echo "`$BB echo $i | $BB cut -d ":" -f 3`" > /data/m2sd/property/$I_INDEX
+				$BB chown 1000.1000 /data/m2sd/property/$I_INDEX
+				$BB chmod 0660 /data/m2sd/property/$I_INDEX
+			fi
+		done
+
+		# Get all settings
+		PROP_SAFEMODE="`$BB cat /data/m2sd/property/m2sd.safemode.switch`"
+		PROP_CACHE="`$BB cat /data/m2sd/property/m2sd.cache.switch`"
+		PROP_DLCACHE="`$BB cat /data/m2sd/property/m2sd.cache.download.switch`"
+		PROP_EXTFS="`$BB cat /data/m2sd/property/m2sd.extfs.value`" 
+		PROP_APPS="`$BB cat /data/m2sd/property/m2sd.apps.switch`"
+		PROP_SWAP="`$BB cat /data/m2sd/property/m2sd.swap.switch`" 
+		PROP_READAHEAD="`$BB cat /data/m2sd/property/m2sd.readahead.value`"
+		PROP_JOURNAL="`$BB cat /data/m2sd/property/m2sd.journal.switch`" 
+		PROP_FSCHK="`$BB cat /data/m2sd/property/m2sd.fschk.switch`"
+		PROP_NOATIME="`$BB cat /data/m2sd/property/m2sd.noatime.switch`"
+
+		CMD_PS=$(which ps || echo $BB ps)
+
+		if $BB [ "$PROP_SAFEMODE" = "1" ] || ( $BB [ "$PROP_SAFEMODE" = "-1" ] && $BB [ ! `$BB sleep 1` ] && $BB [ ! -z "`$CMD_PS | grep /system/bin/servicemanager`" ] ); then
+			doLog w "SysInit Warning: Init.d is executed as a service! Switching to safe mode..."
+
+			# Because running sysinit as an service allows the rest of the boot process to run at the same time,
+			# moving things like data and dalvik cache will create problems. The system will keep trying to rebuild these as they are being moved.
+			# Also CM has added system dex's to be placed in /cache/dalvik-cache rather than /data/dalvik-cache, so moving /cache to /data or /sd-ext
+			# will also create dalvik problems. Instead we turn off data, dalvik and only move /cache/download.
+
+			PROP_DALVIK="0"
+			PROP_CMDALVIK="0"
+			PROP_DATA="0"
+			PROP_RMOUNT="0"
+			M2SD_STATUS="safe-mode"
+		else
+			PROP_DALVIK="`$BB cat /data/m2sd/property/m2sd.dalvik.switch`" 
+			PROP_CMDALVIK="`$BB cat /data/m2sd/property/m2sd.dalvik.cm.switch`"
+			PROP_DATA="`$BB cat /data/m2sd/property/m2sd.data.switch`"
+			PROP_RMOUNT="`$BB cat /data/m2sd/property/m2sd.rmount.switch`"
+			M2SD_STATUS="loaded"
+		fi
+
+		# ////////////////////////////////////////////////////////////////////////////////////////////
+		# -------------------------------------------------------------------------------------------
+		# DO SOME INTERNAL NAND OPTIMIZATIONS
+		# -------------------------------------------------------------------------------------------
+		# \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+
+		DEV_SYSTEM="`$BB grep '/dev/' /proc/mounts | $BB grep ' /system ' | $BB tr -s ' ' | $BB cut -d  ' ' -f 1`"
+		DEV_DATA="`$BB grep '/dev/' /proc/mounts | $BB grep ' /data ' | $BB tr -s ' ' | $BB cut -d ' ' -f 1`"
+		y=0
+
+		for i in $DEV_SYSTEM $DEV_DATA; do
+			$BB [ "$CACHE_DEBUG" = "1" ] && doLog d "Checking device $i to prepare for Optimization..."
+
+			if $BB [ -e "$i" ]; then
+				MTD_MM="`$BB ls -l $i | $BB tr -s ' ' | $BB sed -ne 's/^.*[ ]\([0-9]*\),[ ]\([0-9]*\)[ ].*$/\1:\2/p'`"
+
+				if $BB [ -e /sys/devices/virtual/bdi/$MTD_MM/read_ahead_kb ]; then
+					$BB [ "$y" = "0" ] && doLog v "Optimizing /system readahead..." || doLog v "Optimizing /data readahead..."
+					$BB echo 4 > /sys/devices/virtual/bdi/$MTD_MM/read_ahead_kb
+				fi
+			fi
+
+			if $BB [ "$y" = "0" ]; then
+				doLog v "Disabling /system atime,diratime and enabling relatime..."
+				$BB mount -o remount,noatime,nodiratime,relatime,barrier=0,nobh /system
+
+			elif $BB [ "$PROP_NOATIME" = "1" ]; then
+				doLog v "Disabling /data atime,diratime and enabling relatime..."
+				$BB mount -o remount,noatime,nodiratime,relatime /data
+			fi
+
+			y=$(($y + 1))
+		done
+
+		# ////////////////////////////////////////////////////////////////////////////////////////////
+		# -------------------------------------------------------------------------------------------
+		# LOCATE THE SDCARD PARTITIONS
+		# -------------------------------------------------------------------------------------------
+		# \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+
+		doLog v "Waiting for sdcard to initiate..."
+		MMC_DEVICE="`getprop ro.m2sd.path.sdcard`"
+
+		for MMC_TRIES in `seq 1 8`; do
+			if $BB [ ! -z "$MMC_DEVICE" ]; then
+				if [ -b $MMC_DEVICE ]; then
+					break
+				fi
+
+			else
+				for MMC_NUM in `seq 0 9`; do
+					$BB [ "$CACHE_DEBUG" = "1" ] && doLog d "Checking /sys/block/mmcblk$MMC_NUM/device/type for sdcard flag..."
+
+					if $BB [ -e /sys/block/mmcblk$MMC_NUM/device/type ] && $BB [ "`$BB cat /sys/block/mmcblk$MMC_NUM/device/type`" = "SD" ]; then
+						MMC_DEVICE=/dev/block/mmcblk${MMC_NUM}; break 2
+					fi
+				done
+			fi
+
+			if $BB [ $MMC_TRIES -gt 7 ]; then
+				doLog e "Timedout waiting for sdcard to initiate!"; break
+
+			else
+				sleep 1
+			fi
+		done
+
+		if $BB [ ! -z "$MMC_DEVICE" ]; then
+			doLog v "sdcard found at /dev/block/mmcblk$MMC_NUM..."
+
+			MMC_PARTITIONS="`$BB fdisk -l $MMC_DEVICE | $BB awk '/^\// {print $1}'`"
+			MMC_MM="`$BB ls -l $MMC_DEVICE | $BB tr -s " " | $BB sed -ne "s/^.*[ ]\([0-9]*\),[ ]\([0-9]*\)[ ].*$/\1:\2/p"`"
+
+			$BB [ "$CACHE_DEBUG" = "1" ] && doLog d "Checking device $MMC_MM to prepare for Optimization..."
+
+			if $BB [ -e /sys/devices/virtual/bdi/$MMC_MM/read_ahead_kb ]; then
+				doLog v "Setting sdcard readahead to ${PROP_READAHEAD}kb..."
+				$BB echo $PROP_READAHEAD > /sys/devices/virtual/bdi/$MMC_MM/read_ahead_kb
+			fi
+
+			for i in $MMC_PARTITIONS; do
+				if $BB [ -z "$MMC_FAT" ]; then
+					$BB [ "$CACHE_DEBUG" = "1" ] && doLog d "Found Fat32 partition at $i..."
+					MMC_FAT=$i
+
+				elif $BB [ -z "$MMC_SDEXT" ]; then
+					$BB [ "$CACHE_DEBUG" = "1" ] && doLog d "Found sd-ext partition at $i..."
+					MMC_SDEXT=$i
+
+				else
+					$BB [ "$CACHE_DEBUG" = "1" ] && doLog d "Found SWAP partition at $i..."
+					MMC_SWAP=$i; break
+				fi
+			done
+		fi
+
+		# ////////////////////////////////////////////////////////////////////////////////////////////
+		# -------------------------------------------------------------------------------------------
+		# ACTIVATE THE SWAP PARTITION IF PRESENT AND ENABLED
+		# -------------------------------------------------------------------------------------------
+		# \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+
+		if $BB [ ! -z "$MMC_SWAP" ]; then
+			doProp set mounts2sd.swap.device "$MMC_SWAP"
+
+			if $BB [ "$PROP_SWAP" = "1" ]; then
+				$BB swapon $MMC_SWAP
+
+				if $BB [ "$?" = "0" ]; then
+					doLog v "Activating SWAP partition..."
+					doProp set mounts2sd.swap.status "loaded"
+
+				else
+					doLog w "Could not activate SWAP. Check kernel support!"
+				fi
+			fi
+
+		elif $BB [ "$PROP_SWAP" = "1" ]; then
+			doLog v "Did not find any SWAP partition. Skipping..."
+		fi
+
+		# ////////////////////////////////////////////////////////////////////////////////////////////
+		# -------------------------------------------------------------------------------------------
+		# MOUNT SD-EXT PARTITION AND MOVE CONTENT FROM DATA TO SD-EXT
+		# -------------------------------------------------------------------------------------------
+		# \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+
+		if $BB [ ! -z "$MMC_SDEXT" ]; then
+			doProp set mounts2sd.sdext.device "$MMC_SDEXT"
+
+			MMC_DEVNUM="`$BB ls -l $MMC_SDEXT | $BB tr -s " " | $BB sed -ne "s/^.*[ ]\([0-9]*\),[ ]\([0-9]*\)[ ].*$/\1:\2/p"`"
+			MMC_DEVNAME="`$BB basename $MMC_SDEXT`"
+
+			if $BB [ ! -z "`$BB grep $MMC_DEVNAME /proc/mounts`" ] || $BB [ ! -z "`$BB grep $MMC_DEVNUM /proc/mounts`" ]; then
+				doLog w "Another A2SD script was detected. Will attempt to disable it..."
+
+				for i in /data/m2sd/init.d/*; do
+					if $BB [ "`$BB basename $i`" != "`$BB basename $SCRIPT_PATH`" ]; then
+						$BB [ "$CACHE_DEBUG" = "1" ] && doLog d "Checking $i for any sd-ext parts..."
+
+						if $BB [ ! -z "`$BB grep $MMC_DEVNAME $i`" ] || $BB [ ! -z "`$BB grep $MMC_DEVNUM $i`" ]; then
+							doLog v "Disabling the script $i..."
+							$BB chmod 0666 $i
+						fi
+					fi
+				done
+
+				doLog v "Unmounting the sd-ext partition in order to continue..."
+				$BB umount $MMC_SDEXT
+				sync
+			fi
+
+			if $BB [ -z "`$BB grep $MMC_DEVNAME /proc/mounts`" ] && $BB [ -z "`$BB grep $MMC_DEVNUM /proc/mounts`" ]; then
+				if $BB [ "$PROP_EXTFS" != "auto" ] && $BB [ -z "`$BB grep $PROP_EXTFS /proc/filesystems | $BB grep -v 'nodev'`" ]; then
+					doLog w "The defined force sd-ext filesystem type $PROP_EXTFS is not supported. Switching to auto detection!"
+					PROP_EXTFS="auto"
+				fi
+
+				if $BB [ "$PROP_FSCHK" = "1" ]; then
+					if $BB [ ! -z "`$BB which e2fsck`" ] || $BB [ ! -z "`$BB --list | $BB grep e2fsck`" ]; then
+						$BB [ ! -z "`$BB which e2fsck`" ] && CMD_FSCK="`$BB which e2fsck`" || CMD_FSCK="$BB e2fsck"
+
+						doLog v "Running e2fsck on sd-ext..."
+						$CMD_FSCK -y -D $MMC_SDEXT
+		
+						E2STATUS=$?
+
+						if $BB [ $E2STATUS -gt 0 ] && $BB [ $E2STATUS -lt 4 ]; then
+							doLog e "Error detected while checking sd-ext. Auto correction was performed!"
+
+						elif $BB [ $E2STATUS -gt 0 ]; then
+							doLog e "Error detected while checking sd-ext. Everything was left uncorrected!"
+						fi
+					
+					else
+						doLog w "Could not do a file system check on sd-ext. Missing e2fsck!"
+					fi
+				fi
+
+				if $BB [ "$PROP_JOURNAL" != "-1" ]; then
+					if $BB [ "$PROP_EXTFS" = "ext4" ]; then
+						if $BB [ ! -z "`$BB which tune2fs`" ] || $BB [ ! -z "`$BB --list | $BB grep tune2fs`" ]; then
+							$BB [ ! -z "`$BB which tune2fs`" ] && CMD_TUNE2FS="`$BB which tune2fs`" || CMD_TUNE2FS="$BB tune2fs"
+
+							if $BB [ "$PROP_JOURNAL" = "0" ]; then
+								if $BB [ ! -z "`$CMD_TUNE2FS -l /dev/loop2 | $BB grep features | $BB grep has_journal`" ]; then
+									doLog v "Disabling journal on sd-ext..."
+									$CMD_TUNE2FS -O ^has_journal $MMC_SDEXT
+								fi
+
+							else 	
+								if $BB [ -z "`$CMD_TUNE2FS -l /dev/loop2 | $BB grep features | $BB grep has_journal`" ]; then
+									doLog v "Enabling journal on sd-ext..."
+									$CMD_TUNE2FS -O has_journal $MMC_SDEXT
+								fi
+							fi
+
+						else
+							doLog w "Could not handle the ext4 journal. Missing tune2fs!"
+						fi
+
+					elif $BB [ "$PROP_EXTFS" = "ext3" ]; then
+						doLog v "Disabling journal on sd-ext..."
+						$BB [ -z "$OPTIONS" ] && OPTIONS="noload" || OPTIONS="$OPTIONS,noload"
+					fi
+				fi
+
+				if $BB [ "$PROP_NOATIME" = "1" ]; then
+					doLog v "Disabling sd-ext atime,diratime and enabling relatime..."
+					$BB [ -z "$OPTIONS" ] && OPTIONS="noatime,nodiratime,relatime" || OPTIONS="$OPTIONS,noatime,nodiratime,relatime"
+				fi
+
+				$BB [ -z "$OPTIONS" ] && OPTIONS="noauto_da_alloc,data=ordered,commit=15,barrier=1,nouser_xattr,errors=continue,nosuid,nodev" || OPTIONS="$OPTIONS,noauto_da_alloc,data=ordered,commit=15,barrier=1,nouser_xattr,errors=continue,nosuid,nodev"
+
+				if $BB [ "$PROP_RMOUNT" = "1" ]; then
+					doLog v "Moving internal nand mount point from /data to /sd-ext..."
+					$BB mount --move /data /sd-ext; sync
+
+					if $BB [ ! -z "`$BB grep ' /sd-ext ' /proc/mounts`" ]; then
+						doProp set mounts2sd.rmount.status "loaded"
+						SDEXT_MOUNTPOINT="/data"
+
+					else
+						doLog e "It was not possible to move the internal nand data mount point to /sd-ext!"
+					fi
+				else
+					SDEXT_MOUNTPOINT="/sd-ext"
+				fi
+
+				if $BB [ "$PROP_RMOUNT" != "1" ] || $BB [ "`doProp get mounts2sd.rmount.status`" = "loaded" ]; then
+					$BB mount -o $OPTIONS -t $PROP_EXTFS $MMC_SDEXT $SDEXT_MOUNTPOINT; sync
+
+					if $BB [ -z "`$BB grep -w $MMC_SDEXT /proc/mounts`" ] && $BB [ "$PROP_EXTFS" != "auto" ]; then
+						doLog w "Could not mount sd-ext as $PROP_EXTFS. Trying again with auto detection and no additional options!"
+						PROP_EXTFS="auto"		
+
+						$BB mount -t $PROP_EXTFS $MMC_SDEXT $SDEXT_MOUNTPOINT; sync
+					fi
+
+					if $BB [ ! -z "`$BB grep -w $MMC_SDEXT /proc/mounts`" ]; then
+						$BB [ "$PROP_EXTFS" = "auto" ] && doLog v "The sd-ext partition was mounted successfully at $SDEXT_MOUNTPOINT using auto detection of the file system type!" || doLog v "The sd-ext partition was mounted successfully at $SDEXT_MOUNTPOINT forced as $PROP_EXTFS!"
+
+						$BB chown 1000.1000 $SDEXT_MOUNTPOINT
+						$BB chmod 771 $SDEXT_MOUNTPOINT
+
+						SDEXT_SIZE="`$BB df -m /sd-ext | $BB tail -n1 | $BB tr -s ' ' | $BB cut -d ' ' -f4`"
+						DATA_SIZE="`$BB df -m /data | $BB tail -n1 | $BB tr -s ' ' | $BB cut -d ' ' -f4`"
+
+						DO_CREATE="`$BB grep mkdir /init.rc | $BB grep -e ' \/data\/[^\/]*\(\/[^\/]*\)* ' | $BB tr -s ' ' | $BB sed 's/mkdir \(\/data\/[^ ]*\).*$/\1/'`"
+						DO_REVERT="`$BB grep mkdir /init.rc | $BB grep -e ' \/data\/[^\/]* ' | $BB tr -s ' ' | $BB sed 's/mkdir \/data\/\([^ ]*\).*$/\1/' | $BB grep -ve 'lost+found\|local\|misc\|system\|tombstones\|property\|data\|dalvik\-cache\|app\(\-private\|\-system\)*'`"
+						DO_REVERT="$DO_REVERT local tombstones"
+
+						if ( $BB [ ! -d /data/data ] || $BB [ -z "`$BB find /data/data -type f`" ] ) && ( $BB [ ! -d /sd-ext/data ] || $BB [ -z "`$BB find /sd-ext/data -type f`" ] ); then
+							# ICS creates issues for some reason when /data/data is moved to sd-ext before any data exists. 
+							$BB [ "$PROP_RMOUNT" = "1" ] && DO_MOVE="$DO_MOVE data" || DO_REVERT="$DO_REVERT data"
+
+						else
+							$BB [ "$PROP_DATA" = "1" ] && DO_MOVE="$DO_MOVE data" || DO_REVERT="$DO_REVERT data"
+						fi
+
+						$BB [ "$PROP_DALVIK" = "1" ] && DO_MOVE="$DO_MOVE dalvik-cache" || DO_REVERT="$DO_REVERT dalvik-cache"
+						$BB [ "$PROP_APPS" = "1" ] && DO_MOVE="$DO_MOVE app app-private app-system" || DO_REVERT="$DO_REVERT app app-private app-system"
+						$BB [ "$PROP_RMOUNT" = "1" ] && DO_MOVE="$DO_MOVE property misc system m2sd" || DO_REVERT="$DO_REVERT property misc system m2sd"
+						$BB [ "$PROP_RMOUNT" = "1" ] && MOVE_ORDER="revert move" || MOVE_ORDER="move revert secondmove"
+
+						for action in $MOVE_ORDER; do
+							if $BB [ "$action" = "revert" ]; then
+								for x in $DO_REVERT; do
+									doCreateFolder /data/$x
+
+									$BB [ "$CACHE_DEBUG" = "1" ] && doLog d "Looking in /sd-ext/$x for any content to revert back to /data/$x..."
+
+									if $BB [ -d /sd-ext/$x ] && $BB [ ! -L /sd-ext/$x ] && $BB [ ! -z "`$BB ls -v /sd-ext/$x`" ] && $BB [ ! -z "`$BB find /sd-ext/$x -type f`" ]; then
+										doLog v "Reverting /sd-ext/$x back to /data/$x..."
+
+										X_SIZE="`$BB echo $($BB du -s -m /sd-ext/$x) | $BB tr -s ' ' | $BB cut -d ' ' -f1`"
+
+										$BB [ "$CACHE_DEBUG" = "1" ] && doLog d "Comparing the existing free space in /data (${DATA_SIZE}MB) to the size of /sd-ext/$x (${X_SIZE}MB)..."
+			
+										if $BB [ "$DATA_SIZE" -gt "$X_SIZE" ]; then
+											if $BB [ "$x" != "dalvik-cache" ]; then
+												for tmp in /sd-ext/$x/*; do
+													y="`$BB basename $tmp`"
+
+													if $BB [ -e /data/$x/$y ]; then
+														$BB rm -rf /data/$x/$y
+													fi
+
+													$BB mv -f /sd-ext/$x/$y /data/$x/
+												done
+
+												$BB [ ! -z "`$BB ls -v /sd-ext/$x`" ] && doLog e "Not all from /sd-ext/$x could be moved to /data/$x. Check available disk space!" || $BB rm -rf /sd-ext/$x
+
+											else
+												$BB rm -rf /sd-ext/$x
+											fi
+			
+										else
+											$BB [ "$PROP_RMOUNT" = "1" ] && DO_MOVE="$x $DO_MOVE" || DO_SECONDMOVE="$DO_SECONDMOVE $x"
+											doLog w "The content of /sd-ext/$x is to big for reverting. Linking from sd-ext to data instead!"
+										fi
+										
+									elif $BB [ -e /sd-ext/$x ]; then
+										$BB rm -rf /sd-ext/$x
+									fi
+								done
+							else
+								$BB [ "$action" = "secondmove" ] && DO_MOVE="$DO_SECONDMOVE"
+
+								for x in $DO_MOVE; do
+									doCreateFolder /data/$x
+									doCreateFolder /sd-ext/$x
+
+									$BB [ "$CACHE_DEBUG" = "1" ] && doLog d "Looking in /data/$x for any content to move to /sd-ext/$x..."
+
+									if $BB [ -d /data/$x ] && $BB [ ! -z "`$BB ls -v /data/$x`" ] && $BB [ ! -z "`$BB find /data/$x -type f`" ]; then
+										doLog v "Moving content from /data/$x to /sd-ext/$x..."
+
+										X_SIZE="`$BB echo $($BB du -s -m /data/$x) | $BB tr -s ' ' | $BB cut -d ' ' -f1`"
+
+										$BB [ "$CACHE_DEBUG" = "1" ] && doLog d "Comparing the existing free space in /sd-ext (${SDEXT_SIZE}MB) to the size of /data/$x (${X_SIZE}MB)..."
+
+										if $BB [ "$SDEXT_SIZE" -gt "$X_SIZE" ]; then
+											if $BB [ "$x" != "dalvik-cache" ]; then
+												for tmp in /data/$x/*; do
+													y="`$BB basename $tmp`"
+
+													if $BB [ -e /sd-ext/$x/$y ]; then
+														$BB rm -rf /sd-ext/$x/$y
+													fi
+
+													$BB mv -f /data/$x/$y /sd-ext/$x/
+												done
+
+												$BB [ ! -z "`$BB ls -v /data/$x`" ] && doLog e "Not all from /data/$x could be moved to /sd-ext/$x. Check available disk space!"
+
+											else
+												$BB rm -rf /data/$x/*
+											fi
+
+										else
+											doLog w "The content of /data/$x is to big to be moved to sd-ext!"
+											DO_SKIP_LINK="1"
+										fi
+									fi
+
+									if $BB [ "$DO_SKIP_LINK" != "1" ]; then
+										doLog v "Creating link between /data/$x and /sd-ext/$x..."
+
+										$BB mount --bind /sd-ext/$x /data/$x; sync
+
+										if $BB [ ! -z "`$BB grep " /data/$x " /proc/mounts`" ]; then
+											$BB [ "$x" = "app" ] && doProp set mounts2sd.sdext.status.apps "loaded"
+											$BB [ "$x" = "data" ] && doProp set mounts2sd.sdext.status.data "loaded"
+											$BB [ "$x" = "dalvik-cache" ] && doProp set mounts2sd.sdext.status.dalvik "loaded"
+
+										else
+											doLog e "Error while linking /data/$x to /sd-ext/$x!"
+										fi
+
+									else
+										DO_SKIP_LINK="0"
+									fi
+								done
+							fi
+						done
+
+						for x in $DO_CREATE; do
+							$BB [ "$CACHE_DEBUG" = "1" ] && doLog d "Checking if sub-directory $x exists..."
+							doCreateFolder $x
+						done
+
+					else
+						doLog e "Error while mounting the sd-ext partition!"
+
+						if $BB [ "`doProp get mounts2sd.rmount.status`" = "loaded" ]; then
+							doProp remove mounts2sd.rmount.status
+							doLog v "Moving internal nand data mount point back to /data!"
+							$BB mount --move /sd-ext /data; sync
+						fi
+					fi
+				fi
+
+			else
+				doLog e "Unable to unmount the sd-ext partition. Canceling the sd-ext process!"
+			fi
+
+		elif $BB [ ! -z "$MMC_DEVICE" ]; then
+			doLog w "Could not find any sd-ext partitions on the sdcard!"
+		fi
+
+		# ////////////////////////////////////////////////////////////////////////////////////////////
+		# -------------------------------------------------------------------------------------------
+		# HANDLE SYSTEM APP LINKING FROM /DATA/APP-SYSTEM TO /SYSTEM/APP
+		# -------------------------------------------------------------------------------------------
+		# \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+		$BB touch /system/s-off 2> /dev/null
+
+		if $BB [ -e /system/s-off ]; then
+			$BB rm -rf /system/s-off
+
+			if $BB [ ! -z "`$BB --list | $BB grep readlink`" ]; then
+				for x in /system/app/*; do
+					if $BB [ -L $x ] && $BB [ ! -e "`$BB readlink $x`" ]; then
+						$BB [ "$CACHE_DEBUG" = "1" ] && doLog d "Deleting un-used system app link $x..."
+						$BB rm -rf $x
+					fi
+				done
+
+			else
+				doLog w "Missing readlink support in busybox. Skipping app-system cleanup!"
+			fi
+
+			if $BB [ -d /data/app-system ] && $BB [ ! -z "`$BB ls -v /data/app-system`" ]; then
+				doLog v "Linking apps from /data/app-system to /system/app..."
+
+				for x in /data/app-system/*; do
+					y="`$BB basename $x`"
+
+					if $BB [ ! -e /system/app/$y ] || $BB [ ! -L /system/app/$y ]; then
+						$BB [ -e /system/app/$y ] && $BB rm -rf /system/app/$y
+						$BB ln -s $x /system/app/
+					fi
+				done
+
+			elif $BB [ ! -d /data/app-system ]; then
+				doCreateFolder /data/app-system
+			fi
+
+		else
+			doLog w "Cannot link apps from app-system to /system/app on S-On devices!"
+		fi
+
+		# ////////////////////////////////////////////////////////////////////////////////////////////
+		# -------------------------------------------------------------------------------------------
+		# FIX FILE AND FOLDER PERMISSIONS IF ENABLED
+		# -------------------------------------------------------------------------------------------
+		# \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+
+		if $BB [ -f /data/m2sd/property/m2sd.fix.permissions.boot ] && $BB [ "`$BB cat /data/m2sd/property/m2sd.fix.permissions.boot`" = "1" ]; then
+			doLog v "Performing a one time permissions check..."
+			$BB echo "0" > /data/m2sd/property/m2sd.fix.permissions.boot
+
+			if $BB [ ! -z "$BB which fix_permissions" ]; then
+				fix_permissions -l -r
+
+			else
+				doLog w "Could not locate the script 'fix_permissions'!"
+			fi
+
+			for i in `$BB find /data/m2sd`; do
+				$BB chown 1000.1000 $i
+
+				if $BB [ -d $i ]; then
+					$BB chmod 0771 $i
+
+				else
+					$BB chmod 0660 $i
+				fi
+			done
+
+			chown 1000.1000 /data/m2sd
+			chmod 0771 /data/m2sd
+		fi
+
+		# ////////////////////////////////////////////////////////////////////////////////////////////
+		# -------------------------------------------------------------------------------------------
+		# MOUNT A TEMPFS CACHE PARTITION IF THE INTERNAL IS TO SMALL
+		# -------------------------------------------------------------------------------------------
+		# \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+
+		if $BB [ "$PROP_CACHE" = "1" ] || ( $BB [ "$PROP_CACHE" = "-1" ] && $BB [ "`$BB df -m /cache | $BB tail -n1 | $BB tr -s ' ' | $BB cut -d ' ' -f2`" -lt 40 ] ); then
+			SIZE_SDEXT="`$BB df -m /sd-ext | $BB tail -n1 | $BB tr -s ' ' | $BB cut -d ' ' -f4`"
+			SIZE_DATA="`$BB df -m /data | $BB tail -n1 | $BB tr -s ' ' | $BB cut -d ' ' -f4`"
+
+			if $BB [ ! -z "`$BB grep ' /sd-ext ' /proc/mounts`" ] && $BB [ $SIZE_SDEXT -ge 128 ] && $BB [ $SIZE_SDEXT -gt $SIZE_DATA ]; then
+				CACHE_LOCATION="/sd-ext/cache"
+
+			elif $BB [ $SIZE_DATA -ge 128 ]; then
+				CACHE_LOCATION="/data/cache"
+
+			else
+				CACHE_LOCATION="tmpfs"
+			fi
+
+			for i in /data/cache /sd-ext/cache; do
+				if $BB [ "$i" != "$CACHE_LOCATION" ] && $BB [ -d $i ]; then
+					$BB rm -rf $i
+
+				elif $BB [ ! -d $i ]; then
+					doCreateFolder $i "1000.2001" "0777"
+				fi
+			done
+
+			$BB [ "$PROP_DLCACHE" = "1" ] && CACHE_PATH="/cache/download" || CACHE_PATH="/cache"
+
+			if $BB [ ! -z "`$BB grep " $CACHE_PATH " /proc/mounts`" ]; then
+				doLog v "Umounting pre-mounted $CACHE_PATH..."
+				$BB umount /cache
+			fi
+
+			doCreateFolder $CACHE_PATH "1000.2001" "0777"
+
+			doLog v "Mounting $CACHE_PATH at $CACHE_LOCATION..."
+			if $BB [ "$CACHE_LOCATION" = "tmpfs" ]; then
+				$BB mount -t tmpfs -o size=128M,mode=0771 tmpfs $CACHE_PATH; sync
+			else
+				$BB mount --bind $CACHE_LOCATION $CACHE_PATH; sync
+			fi
+			$BB chown 1000.2001 $CACHE_PATH
+
+			if $BB [ ! -z "`$BB grep " $CACHE_PATH " /proc/mounts`" ]; then
+				if $BB [ "$PROP_DLCACHE" != "1" ]; then
+					doCreateFolder /cache/download "1000.2001" "0777" force
+				fi
+
+				doProp set mounts2sd.cache.status "loaded"
+				doProp set mounts2sd.cache.path "$CACHE_PATH"
+				doProp set mounts2sd.cache.location "$CACHE_LOCATION"
+
+			else
+				doLog e "Error while mounting $CACHE_PATH at $CACHE_LOCATION!"
+			fi
+		fi
+
+		# ////////////////////////////////////////////////////////////////////////////////////////////
+		# -------------------------------------------------------------------------------------------
+		# MOUNT /DATA/LOCAL/TMP TO THE CACHE PARTITION IF THE DATA PARTITION GET'S BELOW CACHE SIZE
+		# -------------------------------------------------------------------------------------------
+		# \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+
+		if $BB [ "$PROP_CACHE" = "1" ] || ( $BB [ "$PROP_CACHE" = "-1" ] && $BB [ "`$BB df -m /data | $BB tail -n1 | $BB tr -s ' ' | $BB cut -d ' ' -f4`" -lt "`$BB df -m /cache | $BB tail -n1 | $BB tr -s ' ' | $BB cut -d ' ' -f4`" ] ); then
+			doCreateFolder /data/local/tmp "2000.2000" "0777" force
+
+			doLog v "Creating link between /cache and /data/local/tmp..."
+			$BB mount --bind /cache /data/local/tmp; sync
+
+			if $BB [ -z "`$BB grep ' /data/local/tmp ' /proc/mounts`" ]; then
+				doLog e "Error while linking /data/local/tmp to /cache!"
+			fi
+
+			if $BB [ -d /data/data/com.android.providers.downloads/cache ]; then
+				$BB chmod 0777 /data/data/com.android.providers.downloads/cache
+
+				doLog v "Creating link between /cache and /data/data/com.android.providers.downloads/cache..."
+				$BB mount --bind /cache /data/data/com.android.providers.downloads/cache; sync
+
+				if $BB [ -z "`$BB grep ' /data/data/com.android.providers.downloads/cache ' /proc/mounts`" ]; then
+					doLog e "Error while linking /data/data/com.android.providers.downloads/cache to /cache!"
+				fi
+			fi
+		fi
+
+		# ////////////////////////////////////////////////////////////////////////////////////////////
+		# -------------------------------------------------------------------------------------------
+		# MOUNT /CACHE/DALVIK-CACHE TO /DATA/DALVIK-CACHE IF ENABLED
+		# -------------------------------------------------------------------------------------------
+		# \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+		# We will auto enable the cmdalvik option if cache has been enabled. We do not at any time want dalvik data on an temp partition.
+		if $BB [ "`$BB grep dalvik.vm.dexopt-data-only /system/build.prop`" != "dalvik.vm.dexopt-data-only=1" ] && ( $BB [ "$PROP_CMDALVIK" = "1" ] || ( $BB [ "$PROP_CMDALVIK" = "-1" ] && ( ( $BB [ "`doProp get mounts2sd.cache.status`" = "loaded" ] && $BB [ "$PROP_DLCACHE" != "1" ] ) || $BB [ "`$BB df -m /cache | $BB tail -n1 | $BB tr -s ' ' | $BB cut -d ' ' -f2`" -lt 40 ] ) ) ); then
+			$BB [ "$CACHE_DEBUG" = "1" ] && doLog d "Connecting /cache/dalvik-cache with /data/dalvik-cache..."
+
+			doCreateFolder /data/dalvik-cache
+
+			if $BB [ ! -d /cache/dalvik-cache ]; then
+				$BB mkdir /cache/dalvik-cache
+
+			else
+				if $BB [ ! -z "`$BB ls -v /cache/dalvik-cache`" ]; then
+					# If /cache/dalvik-cache has been used, /data/dalvik-cache is outdated.
+					# We remove any old files from /data/dalvik-cache to avoid problems.
+					for x in /cache/dalvik-cache/*; do
+						y="`$BB basename $x`"
+
+						if $BB [ -e /data/dalvik-cache/$y ]; then
+							$BB [ "$CACHE_DEBUG" = "1" ] && doLog d "Deleting old dalvik-cache content /data/dalvik-cache/$y..."
+							$BB rm -rf /data/dalvik-cache/$y
+						fi
+					done
+
+					$BB rm -rf /cache/dalvik-cache/*
+				fi
+			fi
+
+			doLog v "Creating link between /cache/dalvik-cache and /data/dalvik-cache..."
+			$BB mount --bind /data/dalvik-cache /cache/dalvik-cache; sync
+
+			$BB [ ! -z "`$BB grep ' /cache/dalvik-cache ' /proc/mounts`" ] && doProp set mounts2sd.cmdalvik.status "loaded" || doLog e "Error while linking /cache/dalvik-cache to /data/dalvik-cache!"
+		fi
+
+		# ////////////////////////////////////////////////////////////////////////////////////////////
+		# -------------------------------------------------------------------------------------------
+		# FINALIZE THE INIT PROCESS
+		# -------------------------------------------------------------------------------------------
+		# \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+
+		doLog v "Mounts2SD has been loaded!"
+
+		$BB echo "" >> /data/m2sd/m2sd.log
+		$BB echo "Registered properties:" >> /data/m2sd/m2sd.log
+		$BB echo "----------------------" >> /data/m2sd/m2sd.log
+		doProp get | $BB grep mounts2sd >> /data/m2sd/m2sd.log
+		$BB echo "" >> /data/m2sd/m2sd.log
+		$BB echo "Mount Points:" >> /data/m2sd/m2sd.log
+		$BB echo "-------------" >> /data/m2sd/m2sd.log
+		$BB df -h >> /data/m2sd/m2sd.log
+		$BB echo "" >> /data/m2sd/m2sd.log
+
+		doProp set mounts2sd.status "$M2SD_STATUS"
+
+		if $BB [ -e /sys/class/leds/green/brightness ]; then
+			$BB echo 0 > /sys/class/leds/green/brightness
+
+		elif $BB [ -e /sys/class/leds/button-backlight/brightness ]; then
+			$BB echo 0 > /sys/class/leds/button-backlight/brightness
+		fi
+
+		# Kill all active processes 
+		$BB [ ! -z "$LOGCAT_PID" ] && $BB kill $LOGCAT_PID 2> /dev/null
+
+		# Remount partitions with read permissions
+		$BB [ "$WR_ROOT" != "rw" ] && $BB mount -o remount,ro /
+		$BB [ "$WR_SYSTEM" != "rw" ] && $BB mount -o remount,ro /system
+
+		sync
+	fi
+done

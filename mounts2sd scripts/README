@@ -1,0 +1,108 @@
+[script] Mount2SD - An All-in-one to sd-ext script (v4.6.2 Updated Jul 14, 2012)
+Mounts2SD - An All-in-one to sd-ext script
+
+Mounts2SD is a customizable sd-ext control script that can be used to move content to and from the second sdcard partition known in Android as sd-ext. These scripts comes in many variants with different purposes. Mounts2SD has most of these, and more, build into one single script with controls to set it up after most needs.
+
+Features
+
+    Graphical installer with configuration options and auto deletion of almost any existing app2sd script
+    Control script to manage configuration from shell
+    SWAP Support
+    Link Apps from data as system apps
+    Move Apps to sd-ext
+    Move Dalvik-cache to sd-ext
+    Move Apps Data to sd-ext
+    Move system linked apps to sd-ext
+    Move Cache to a tmpfs (With auto control)
+    Internal nand and sdcard readahead optimization
+    Handles slow sdcards that takes time to initiate
+    Checks filesystems for errors on boot using e2fsck
+    Let's you use whatever linux filesystem supported by kernel
+    Able to revert any prev. options
+    Fix permissions
+    Internal/External storage optimization
+    Fix CyanogenMod dalvik to /cache
+    Revert the sd-ext/data partitions so that sd-ext becomes the new /data
+    Android Market 'Not enough space' fix
+    Checks available free space before moving content
+
+
+How to install
+
+    Note that you need to have a custom ROM installed which supports init.d scripts.
+        Download the ZIP file in the download section
+        Copy the ZIP file to your phones SD-Card
+        Boot you phone into recovery
+        Make sure that recovery does not check ZIP's signature as the ZIP is not signed
+        Choose to install ZIP from SD-Card
+        Select the ZIP file you copied to the SD-Card and fallow the installation process
+    After installation, you can change any settings you choose during install, by using the shell command 'm2sd <option> <value> from an adb shell or a terminal app on your phone. You can type 'm2sd help' in the shell to get a list of available options and values.
+
+    You can also read more about the different option below.
+
+
+Partition table
+
+    Required partition table
+        /sdcard (Fat32)
+        /sd-ext
+        SWAP (Optional)
+
+
+Safe Mode
+
+    As of version 2.2.0, m2sd has a safe-mode state. This is an automatic state that is used when the script can't detect a correct sysinit method. The correct way to execute init.d, is to add "exec /system/bin/sysinit" to the init.rc file and of cause create the script sysinit that will execute init.d
+
+    The old way is to create a service for init.d in init.rc.
+    The problem with the service is that it is executed while the rest of the boot process is working. This means that moving things like /data/data and /data/dalvik-cache will create problems, because the system will keep trying to rebuild the moved content to it's original path while m2sd is moving it.
+
+    The sysinit script executed with the exec command however, will stall the boot process until all of the init.d scripts has been executed. That means that m2sd can move the content and bind the original path to the sd-ext path before the system starts it's work.
+
+    The Safe mode state will disable dalvik and data no mater what the config says to avoid these problems. So if your ROM runs m2sd in safe-mode, write to the ROM dev's and ask them to include the more correct way of handling init.d
+
+    (Can be disabled using "m2sd safemode disable")
+
+
+System Apps
+
+    By default Android has two app directories in the data partition (/data/app & /data/app-private). Mounts2SD provides a third directory (/data/app-system). Every app placed in this directory will be automatically linked to the /system/app folder, making android believe that it is a system app. Some apps needs this in order to provide additional options. By using /data/app-system, you can achieve this from any file manager without giving write access to the system partition and without taking up two much space on that partition.
+
+    Links will be automatically removed again once an app is removed from /data/app-system
+
+
+Configuration options
+
+    Apps - m2sd apps <enable/disable>
+    Quote:
+    By enabling this option, the script will move all apps from /data/app into /sd-ext/app and link that folder to the original path so that Android can find the content. This is the function of the most app2sd scripts.
+    Dalvik Cache - m2sd dalvik <enable/disable>
+    Quote:
+    By enabling this option, the script will move all content from /data/dalvik-cache into /sd-ext/dalvik-cache and link that folder to the original path so that Android can find the content.
+    Data - m2sd data <enable/disable>
+    Quote:
+    By enabling this option, the script will move all content from /data/data into /sd-ext/data and link that folder to the original path so that Android can find the content.
+    Cache - m2sd cache <enable/disable/auto>
+    Quote:
+    By enabling this option, the script will link /sd-ext/cache to the /cache location. This is useful if your cache partition is to small to download big apps from market.
+
+    If you don't have an sd-ext partition, the cache will be linked to /data/cache instead.
+
+    Also by setting the auto option instead of enable, the script will only remount the cache if the nand cache is below 40mb.
+    Download Cache - m2sd dlcache <enable/disable>
+    Quote:
+    By enabling this option, the script will only link /cache/download to either sd-ext, data or tmpfs.
+    File System Type - m2sd extfs <filesystem>
+    Quote:
+    By default M2SD mounts the sd-ext partition using auto file system detection. However some kernels have pure support for auto detection which means that for an example ext4 get's mounted as ext2. This option allows you to define a file system manually to use when mounting the sd-ext partition.
+    Readahead - m2sd readahead <value in kb>
+    Quote:
+    By default M2SD set's the sdcard readahead to 512kb. This is the recommended value for most use, however if you use a lot of UMS transfers and have a fast sdcard, it might be useful to set this value a bit higher.
+    Noatime - m2sd noatime <enable/disable>
+    Quote:
+    By default m2sd remounts the system partition with atime and diratime disabled. By enabling this option, atime an diratime will also be disabled on data and sd-ext.
+    CM Dalvik - m2sd cmdalvik <enable/disable>
+    Quote:
+    For some reason, the CM Team has come up with this fun idea to place the dalvik cache for all system apps in /cache/dalvik-cache instead of /data/dalvik-cache with the rest of it. This is especially fun when you have a cache size of 5mb, because then there is not enough space to build the dalvik-cache and you end up with these really funny reboot loops. However, if you are some boring person that does not find these reboot loop's fun, you can enable cmdalvik to fix this problem. It will force the dalvik-cache in /cache to be placed in the correct /data path among the rest of the dex files.
+    R-Mount - m2sd rmount <enable/disable>
+    Quote:
+    By enabling this option, M2SD will mount the data partition on /sd-ext and the sdext partition on /data. Your sdext partition becomes your new data partition. Every m2sd command will do their regular job, only instead of moving from data to sdext, it will move from sdext to data since sdext will be the primary data partition.
