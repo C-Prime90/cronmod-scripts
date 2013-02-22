@@ -9,6 +9,8 @@ Support is givin on my time to users and developers, if you are in need of suppo
 Credits:
 -Croniccorey @xda "Creator/Maintainer of these scripts"
 -Mastermind1024 @xda "Help with IMEI and Baseband issues in the INT2EXT sciprts"
+-vvFICKvv, DK75, and Dark Passenger @xda "Help to fix compatibility issues with Android 4.2.x"
+-Mortaromarcello @github "Code to check if mmcblk0p2 exists"
 -CyanogenMod "Creator of the bind-cache script found in some of these scripts"
 -Wes Garner "Creator of the auto-zipalign script found in these scripts"
 
