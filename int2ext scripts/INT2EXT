@@ -1,15 +1,24 @@
 #!/system/bin/sh
-###################################
-## CronMod INT2EXT -- 08/24/2012 ##
-##  Written by CronicCorey @xda  ##
-##           40int2ext           ##
-###################################
+#####################################
+##  CronMod INT2EXT -- 02/21/2013  ##
+##   Written by CronicCorey @xda   ##
+##            40int2ext            ##
+#####################################
 ## Thanks to Mastermind1024 @xda for helping to solve the IMEI and Baseband issues on some devices
+## Thanks to vvFICKvv, DK75, and Dark Passenger @xda for help to fix compatibility issues with Android 4.2.x
+## Thanks to Mortaromarcello @github for code to check if mmcblk0p2 exists
+
+## Only continue if mmcblk0p2 exists
+if [ ! -e /dev/block/mmcblk0p2 ]
+then
+exit
+fi;
 
 ## Set SD cache size
-if [ -e /sys/devices/virtual/bdi/179:0/read_ahead_kb ]
+SD_CACHE=/sys/devices/virtual/bdi/179:0/read_ahead_kb
+if [ -e $SD_CACHE ]
 then
-busybox echo "2048" > /sys/devices/virtual/bdi/179:0/read_ahead_kb
+busybox echo "2048" > $SD_CACHE;
 fi;
 
 ## Make /sd-ext directory if needed and unmount /sd-ext if it already mounted
@@ -23,10 +32,12 @@ busybox umount /sd-ext;
 fi;
 
 ## Move /data mount point to /sd-ext
-busybox mount --move /data /sd-ext;
+INT_DATA=$(busybox mountpoint -n /data | cut -d ' ' -f1)
+busybox umount /data;
+busybox mount $INT_DATA /sd-ext;
 
 ## Mount mmcblk0p2 to /data
-busybox mount -o noatime,nodiratime,nosuid,nodev  /dev/block/mmcblk0p2 /data;
+busybox mount -o noatime,nodiratime,nosuid,nodev /dev/block/mmcblk0p2 /data;
 busybox chown 1000:1000 /data;
 busybox chmod 771 /data;
 
@@ -36,40 +47,21 @@ then
 busybox mv /sd-ext/* /data;
 fi;
 
-## Move /nvram, /property, and /radio back to /sd-ext
-if [ ! -e /sd-ext/nvram ] && [ -e /data/nvram ] 
+## Move /misc, /nvram, /property, and /radio back to /sd-ext
+for i in misc nvram property radio;
+do
+if [ ! -e /sd-ext/$i ] && [ -e /data/$i ]
 then
-busybox mv /data/nvram /sd-ext;
-busybox mkdir /data/nvram;
-fi;
-
-if [ ! -e /sd-ext/property ] && [ -e /data/property ]
-then
-busybox mv /data/property /sd-ext;
-busybox mkdir /data/property;
-fi;
-
-if [ ! -e /sd-ext/radio ] && [ -e /data/radio ]
-then
-busybox mv /data/radio /sd-ext;
-busybox mkdir /data/radio;
+busybox mv /data/$i /sd-ext;
+busybox mkdir /data/$i;
 fi;
 
 ## Make Binds
-if [ -e /data/nvram ]
+if [ -e /data/$i ]
 then
-busybox mount -o bind /sd-ext/nvram /data/nvram;
+busybox mount -o bind /sd-ext/$i /data/$i;
 fi;
-
-if [ -e /data/property ]
-then
-busybox mount -o bind /sd-ext/property /data/property;
-fi;
-
-if [ -e /data/radio ]
-then
-busybox mount -o bind /sd-ext/radio /data/radio;
-fi;
+done;
 
 ## Unmount /sd-ext
 busybox umount /sd-ext;
