@@ -1,0 +1,12 @@
+#!/system/bin/sh
+#####################################
+##  CronMod SWAP2INT - 02/27/2013  ##
+##   Written by CronicCorey @xda   ##
+##           45swap2int            ##
+#####################################
+
+## Activate SWAP2INT
+if [ -e /system/bin/swap2int ]
+then
+busybox sh /system/bin/swap2int;
+fi;

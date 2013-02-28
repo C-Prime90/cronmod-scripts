@@ -1,0 +1,50 @@
+#!/system/bin/sh
+#####################################
+##  CronMod SWAP2INT - 02/27/2013  ##
+##   Written by CronicCorey @xda   ##
+##            swap2int             ##
+#####################################
+
+## Swapfile size (1024=1Mb)
+## Default=32768 (32Mb)
+size=32768
+
+## Swappiness
+## Default=60
+swappy=60
+
+## Make swap2int directory
+if [ -e /system/etc/init.d/40int2ext* ] && [ ! -e /sd-ext/swap2int ] && [  ! -e /data/swap2int ]
+then
+busybox mkdir /sd-ext/swap2int && mkdir /data/swap2int;
+busybox mount -o bind /sd-ext/swap2int /data/swap2int;
+busybox umount /sd-ext;
+else 
+if [ ! -e /data/swap2int ]
+then
+busybox mkdir /data/swap2int;
+fi;
+fi;
+
+## Setup swap file
+if [ ! -e /data/swap2int/swapfile ]
+then
+busybox dd if=/dev/zero of=/data/swap2int/swapfile bs=1024 count=$size;
+busybox mkswap /data/swap2int/swapfile;
+chown 1000:1000 /data/swap2int/swapfile;
+chmod 600 /data/swap2int/swapfile;
+fi;
+
+## Create loop and turn on swap
+if [ -e /data/swap2int/swapfile ]
+then
+busybox mknod -m640 /dev/block/swap b 7 8;
+busybox losetup /dev/block/swap /data/swap2int/swapfile;
+busybox swapon /dev/block/swap;
+fi;
+
+## Set swappiness
+if [ -e /proc/sys/vm/swappiness ]
+then
+echo $swappy > /proc/sys/vm/swappiness;
+fi;
