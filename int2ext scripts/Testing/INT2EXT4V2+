@@ -1,0 +1,161 @@
+#!/system/bin/sh
+########################################
+##  CronMod INT2EXT4V2+ -- 02/28/2013 ##
+##     Written by CronicCorey @xda    ##
+##              40int2ext             ##
+########################################
+## Thanks to vvFICKvv, DK75, and Dark Passenger @xda for help to fix compatibility issues with Android 4.2.x
+## Thanks to Mortaromarcello @github for code to check if mmcblk0p2 exists
+
+VER=INT2EXT4V2+
+LOG=/data/$VER.log
+
+## Only continue if mmcblk0p2 exists
+if [ ! -e /dev/block/mmcblk0p2 ]
+then
+busybox echo "mmcblk0p2 does not exist, $VER cannot start" > $LOG;
+exit
+else
+busybox echo "Starting $VER" > $LOG;
+fi;
+
+## Set SD cache size
+SD_CACHE=/sys/devices/virtual/bdi/179:0/read_ahead_kb
+if [ -e $SD_CACHE ]
+then
+busybox echo "Setting SD_CACHE to 2MB" >> $LOG;
+busybox echo "2048" > $SD_CACHE;
+else
+busybox echo "Setting SD_CACHE failed " >> $LOG;
+fi;
+
+## Make /sd-ext directory if needed and unmount /sd-ext if it already mounted
+if [ ! -e /sd-ext ]
+then
+busybox echo "/sd-ext directory does not exist, making it now" >> $LOG;
+busybox mount -o remount,rw /;
+busybox mkdir /sd-ext;
+busybox mount -o remount,ro /;
+else
+busybox echo "Unmounting /sd-ext in case it mounted already" >> $LOG;
+busybox umount /sd-ext;
+fi;
+
+## Move /data mount point to /sd-ext
+busybox echo "Moving /data mount point to /sd-ext" >> $LOG;
+INT_DATA=$(busybox mountpoint -n /data | cut -d ' ' -f1)
+busybox umount /data;
+busybox mount $INT_DATA /sd-ext;
+
+## Mount mmcblk0p2 to /data
+busybox echo "Mounting sd-ext to /data" >> /sd-ext/$VER.log;
+busybox mount -t ext4 -o nosuid,nodev,noatime,nodiratime,barrier=0,nobh,data=writeback,noauto_da_alloc /dev/block/mmcblk0p2 /data;
+busybox chown 1000:1000 /data;
+busybox chmod 771 /data;
+
+## Move log file back to /data
+busybox mv /sd-ext/$VER.log /data;
+
+## Move existing files
+for i in app app-private dalvik-cache;
+do
+if [ ! -e /data/$i ]
+then
+busybox echo "Moving /sd-ext/$i to /data" >> $LOG;
+busybox mv /sd-ext/$i /data;
+fi;
+
+## Setup directorys for binds
+if [ -e /sd-ext/$i ]
+then
+busybox echo "Removing /sd-ext/$i so it wont get binded" >> $LOG;
+busybox rm -rf /sd-ext/$i;
+fi;
+done;
+
+for i in `ls /sd-ext`;
+do
+if [ ! -e /data/$i ]
+then
+busybox echo "Making /data/$i directory for bind" >> $LOG;
+busybox mkdir /data/$i;
+fi;
+
+## Make binds
+if [ -e /data/$i ]
+then
+busybox echo "Binding /sd-ext/$i to /data/$i" >> $LOG;
+busybox mount -o bind /sd-ext/$i /data/$i;
+fi;
+done;
+
+## Unmount /sd-ext, if swap2int is installed leave it mounted until it activates
+if [ ! -e /system/bin/swap2int ] && [ ! -e /system/etc/init.d/45swap2int ]
+then
+busybox echo "Unmounting /sd-ext" >> $LOG;
+busybox umount /sd-ext;
+else
+busybox echo "Leaving /sd-ext mounted so SWAP2INT can activate" >> $LOG;
+fi;
+
+busybox echo "Started $VER successfully" >> $LOG;
+
+sync;
+
+############################################################################################################################################################
+
+########################################################
+##              Bind Cache by CyanogenMod             ##
+## bind mount /data/local/download to /cache/download ##
+##           if cache partition is too small          ##
+########################################################
+
+CACHESIZE=$(df -k /cache | tail -n1 | tr -s ' ' | cut -d ' ' -f2)
+DATAONLY=$(getprop dalvik.vm.dexopt-data-only)
+if [ "$DATAONLY" = "1" ]
+then
+  NEEDED=60000
+else
+  NEEDED=105000
+fi;
+
+if [ $CACHESIZE -lt $NEEDED ]
+then
+  mount -o bind /data/local/download /cache/download;
+fi;
+
+rm /cache/download/downloadfile*.apk >/dev/null 2>&1;
+
+sync;
+
+############################################################################################################################################################
+
+######################################################################
+##                 Automatic ZipAlign by Wes Garner                 ##
+## ZipAlign files in /data that have not been previously ZipAligned ##
+##                Thanks to oknowton for the changes                ##
+######################################################################
+
+LOG_FILE=/data/zipalign.log
+    if [ -e $LOG_FILE ]; then
+    	rm $LOG_FILE;
+    fi;
+    	
+echo "Starting Automatic ZipAlign" | tee -a $LOG_FILE;
+    for apk in /data/app/*.apk ; do
+	zipalign -c 4 $apk;
+	ZIPCHECK=$?;
+	if [ $ZIPCHECK -eq 1 ]; then
+		echo ZipAligning $(basename $apk) | tee -a $LOG_FILE;
+		zipalign -f 4 $apk /cache/$(basename $apk);
+			if [ -e /cache/$(basename $apk) ]; then
+				cp -f -p /cache/$(basename $apk) $apk | tee -a $LOG_FILE;
+				rm /cache/$(basename $apk);
+			else
+				echo ZipAligning $(basename $apk) Failed | tee -a $LOG_FILE;
+			fi;
+	else
+		echo ZipAlign already completed on $apk  | tee -a $LOG_FILE;
+	fi;
+       done;
+echo "Automatic ZipAlign finished" | tee -a $LOG_FILE;
